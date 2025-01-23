@@ -9,6 +9,8 @@
 from enum import IntEnum
 from typing import Union
 
+import struct
+
 from instruments.abstract_instruments import Instrument
 from instruments.units import ureg as u
 from instruments.util_fns import assume_units
@@ -50,17 +52,70 @@ class MFC(Instrument):
             0x0B: "Value too high",
             0x0C: "Value too low",
         }
+        self._data_type = {
+            "character": 0x00,
+            "integer": 0x20,
+            "float": 0x40,
+            "long": 0x40,
+            "string": 0x60,
+        }
         self._commands = {
-            ":0703047163716300\r\n": "Serial number",
+            "Serial number": ":0703047163716300\r\n",
+            "Temperature": ":06800421472147\r\n",
+            "Control Mode": ":06800401040104\r\n",
+            "Set Control Mode": ":0503010104{:}\r\n",
+            "Fsetpoint": ":06800421412143\r\n",
+            "Set fsetpoint": ":0880012143{:}\r\n",
+            "Get capacity unit": ":078004017F017F07\r\n",
         }
 
     @property
     def name(self) -> str:
-        """Get the name of the instrument."""
+        """Get the serial number of the instrument."""
         # decide what is the name to be the return
         # put in docstring
-        data = self.query(":0703047163716300\r\n")
+        data = self.query(self._commands.get("Serial number"))
+        print("data complete: ", data)
+        print("data complete type: ", type(data))
         data = self._extract_data(data)
+        print("data short: ", data)
+        print("data short type: ", type(data))
+        return bytearray.fromhex(data).decode()
+
+    @property
+    def temperature(self) -> u.Quantity:
+        """Get the temperature measured by the MFC.
+        :return: temperature.
+        :rtype: Quantity
+        """
+        data = self.query(self._commands.get("Temperature"))
+        print("data complete: ", data)
+        print("data complete type: ", type(data))
+        data = self._extract_data(data)
+        print("data short: ", data)
+        print("data short type: ", type(data))
+        print(struct.__file__)
+        temperature = struct.unpack("!f", bytes.fromhex(data))[0]
+        return assume_units(temperature, u.degC)
+
+    @property
+    def fsetpoint(self) -> u.Quantity:
+        """Get the setpoint as a float in the capacity in which the instrument was calibrated.
+        :return: fsetpoint
+        :rtype: Quantity
+        """
+        data = self.query(self._commands.get("Fsetpoint"))
+        data = self._extract_data(data)
+        fsetpoint = struct.unpack("!f", bytes.fromhex(data))[0]
+        return assume_units(fsetpoint, u.degC)
+
+    @property
+    def capacity_unit(self) -> str:
+        data = self.query(self._commands.get("Get capacity unit"))
+        print("data all", data)
+        data = self._extract_data(data)
+        print(" data short", data)
+        # capacity_unit = struct.unpack('!f', bytes.fromhex(data))[0]
         return bytearray.fromhex(data).decode()
 
     def _extract_data(self, data):
@@ -73,13 +128,31 @@ class MFC(Instrument):
         3rd byte, 02, is the cmd type (manual rs232 interface p.15)
           02 is "send parameter with destination address, no status required"
         4th and 5th byte are process and parameter numbers.
-        Data starts at 6th bytes until termination characters \r\n"""
-        data_length_str = data[1:3]
-        # hex conversion:
-        data_length = int(data_length_str[0]) * 16 + int(data_length_str)
-        # data starts at 6th byte, that is after 10 characters + the :, so 10
-        # data stops at data[-2], because of termination characters
-        data_extracted = data[11:]
+        If data is a string, byte 6 is the length of the string. if byte 6 is 0x00
+          final data field before terminator should also be 0x00. (manual rs232 interface p.19)
+
+        Data starts at 6th bytes until termination characters \r\n if it is not a string
+        Data type is encoded in the parameter number on bits 5 and 6. x11xxxxx means string.
+        """
+        # check if data has a header, else it is corrupted
+        if len(data) > 13:
+            data_length_str = data[1:3]
+            # hex conversion:
+            data_length = int(data_length_str, 16)
+            parameter = int(data[9:11], 16)
+            is_string = parameter & self._data_type.get("string")
+            if is_string:
+                string_length = int(data[11:13], 16)
+                if string_length == 0:
+                    data_extracted = data[13:-1]
+                else:
+                    data_extracted = data[13 : 13 + 2 * string_length]
+            else:
+                # for other types data starts at 6th byte, that is after 10 characters + the :, so 10
+                # data stops at data[-2], because of termination characters
+                data_extracted = data[11:]
+        else:
+            data_extracted = "data is corrupted !"
         return data_extracted
 
 
