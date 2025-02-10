@@ -63,9 +63,9 @@ class MFC(Instrument):
             "Serial number": ":0703047163716300\r\n",
             "Temperature": ":06800421472147\r\n",
             "Control Mode": ":06800401040104\r\n",
-            "Set Control Mode": ":0503010104{:}\r\n",
+            "Set Control Mode": ":0503010104",
             "Fsetpoint": ":06800421412143\r\n",
-            "Set fsetpoint": ":0880012143{:}\r\n",
+            "Set fsetpoint": ":0880022143",
             "Get capacity unit": ":078004017F017F07\r\n",
         }
         # units as returned by register capacity unit, conversion to defined units
@@ -106,12 +106,31 @@ class MFC(Instrument):
         """
 
         data = self.query(self._commands.get("Fsetpoint"))
+        print("data raw : ", data)
         data = self._extract_data(data)
-        fsetpoint = struct.unpack("!f", bytes.fromhex(data))[0]
+        print(data)
+        setpoint = struct.unpack("!f", bytes.fromhex(data))[0]
 
         # call capacity_unit to get the set unit
         # todo complete dictionary of units
-        return assume_units(fsetpoint, self.capacity_unit)
+        return assume_units(setpoint, self.capacity_unit)
+
+    @fsetpoint.setter
+    def fsetpoint(self, value):
+        # u.Quantity) -> None:
+        value = assume_units(value, self.capacity_unit)
+        # todo set minmax depending on device
+        if value < 0:
+            # * self.capacity_unit:
+            value = 0
+            # * self.capacity_unit
+        value = float(value.magnitude)
+        self.sendcmd(self._make_pkg(self._commands.get("Set fsetpoint"), value))
+        # read buffer and check status :
+        # reply = self.query(self._commands.get("Fsetpoint"))
+        # print("status : ", reply)
+        # todo handling errors
+        # print(self._unpack_status(reply))
 
     # todo return type ?
     @property
@@ -121,6 +140,8 @@ class MFC(Instrument):
         return it as a unit
         """
         data = self.query(self._commands.get("Get capacity unit"))
+        print("capacity unit command : ", self._commands.get("Get capacity unit"))
+        print("capacity unit rawdata : ", data)
         data = self._extract_data(data)
         unit_str = bytearray.fromhex(data).decode()
         return self._units.get(unit_str)
@@ -151,6 +172,7 @@ class MFC(Instrument):
             # hex conversion:
             data_length = int(data_length_str, 16)
             parameter = int(data[9:11], 16)
+            # test data type with a mask
             is_string = parameter & self._data_type.get(
                 "string"
             ) == self._data_type.get("string")
@@ -167,6 +189,34 @@ class MFC(Instrument):
                 data_extracted = data[11:]
 
         return data_extracted
+
+    def _make_pkg(self, cmd, value):
+        """
+        the data sent to the device is at the end of the telegram.
+        Length of the telegram is adjusted with data length.
+        data is converted to HEX.
+        """
+        if cmd is None:
+            print("no command in the index")
+            return
+        if isinstance(value, float):
+            value_hex = hex(struct.unpack("<I", struct.pack("<f", value))[0])[2:]
+        elif isinstance(value, int):
+            value_hex = hex(struct.unpack("<I", struct.pack("<I", 16000))[0])[2:]
+        else:
+            print("error make pkg")
+        print(cmd)
+        print(value_hex)
+        print("type val ", type(value_hex))
+        pkg = "".join((cmd, value_hex, "\r\n"))
+        print("pkg   , ", pkg)
+        return pkg
+
+    def _unpack_status(self, data):
+        if data[7:9] == "00":
+            return True
+        else:
+            return False
 
 
 #
