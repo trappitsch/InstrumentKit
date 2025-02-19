@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 """Support for Bronkhorst mass flow controllers (flow meters)
-   Tested devices :
-     -F-201CV-xxxx
+Tested devices :
+  -F-201CV-xxxx
 """
 
 # IMPORTS #####################################################################
 # commenter
 from enum import IntEnum
 from typing import Union
+from time import sleep
 
 import struct
 
@@ -39,18 +40,54 @@ class MFC(Instrument):
         # open_serial (or open_usb or open_...) returns a class correctly initialized
         super().__init__(filelike)
         self.auth = auth
-        # TODO ERROR CODES man p.13 ?
-        self._exception_codes = {
-            0x01: "Unknown parameter or illegal function code",
-            0x04: "Value invalid",
-            0x05: "Parameter not writable",
-            0x06: "Parameter not readable",
-            0x07: "Stop",
-            0x08: "Not allowed",
-            0x09: "Wrong data type",
-            0x0A: "Internal error",
-            0x0B: "Value too high",
-            0x0C: "Value too low",
+        # error codes man p.13
+        self._error_codes = {
+            ":0101\r\n": "General error",
+            ":0102\r\n": "General error",
+            ":0103\r\n": "Propar protocol error",
+            ":0104\r\n": "Propar protocol error (or CRC error)",
+            ":0105\r\n": "Destination node address rejected",
+            ":0108\r\n": "General error",
+            ":0109\r\n": "Response message timeout",
+        }
+        # status codes man p. 17
+        self._status_codes = {
+            "00": "No error",
+            "01": "Process claimed",
+            "02": "Command error",
+            "03": "Process error",
+            "04": "Parameter error",
+            "05": "Parameter type error",
+            "06": "Parameter value error",
+            "07": "Network not active",
+            "08": "Time-out start charachter",
+            "09": "Time-out serial line",
+            "0A": "Hardware memory error",
+            "0B": "Node number error",
+            "0C": "General communication error",
+            "0D": "Read only parameter.",
+            "0E": "Error PC-communication",
+            "0F": "No RS232 connection",
+            "10": "PC out of memory",
+            "11": "Write only parameter",
+            "12": "System configuration unknown",
+            "13": "No free node address",
+            "14": "Wrong interface type",
+            "15": "Error serial port connection",
+            "16": "Error opening communication",
+            "17": "Communication error",
+            "18": "Error interface bus master",
+            "19": "Timeout answer",
+            "1A": "No start character",
+            "1B": "Error first digit",
+            "1C": "Buffer overflow in host",
+            "1D": "Buffer overflow",
+            "1E": "No answer found",
+            "1F": "Error closing communication",
+            "20": "Synchronisation error",
+            "21": "Send error",
+            "22": "Protocol error",
+            "23": "Buffer overflow in module",
         }
         self._data_type = {
             "character": 0x00,
@@ -59,13 +96,15 @@ class MFC(Instrument):
             "long": 0x40,
             "string": 0x60,
         }
+        # commands definition
+        # Set commands expect a status
         self._commands = {
-            "Serial number": ":0703047163716300\r\n",
+            "Serial number": ":0780047163716300\r\n",
             "Temperature": ":06800421472147\r\n",
             "Control Mode": ":06800401040104\r\n",
-            "Set Control Mode": ":0503010104",
+            "Set Control Mode": ":0580010104",
             "Fsetpoint": ":06800421412143\r\n",
-            "Set fsetpoint": ":0880022143",
+            "Set fsetpoint": ":0880012143",
             "Get capacity unit": ":078004017F017F07\r\n",
         }
         # units as returned by register capacity unit, conversion to defined units
@@ -110,7 +149,6 @@ class MFC(Instrument):
         data = self._extract_data(data)
         print(data)
         setpoint = struct.unpack("!f", bytes.fromhex(data))[0]
-
         # call capacity_unit to get the set unit
         # todo complete dictionary of units
         return assume_units(setpoint, self.capacity_unit)
@@ -127,8 +165,9 @@ class MFC(Instrument):
         value = float(value.magnitude)
         self.sendcmd(self._make_pkg(self._commands.get("Set fsetpoint"), value))
         # read buffer and check status :
-        # reply = self.query(self._commands.get("Fsetpoint"))
-        # print("status : ", reply)
+        # check dressler cesar 1312
+        # todo error if reading setpoint back is very different
+        rep = self.query(self._commands.get("Fsetpoint"))
         # todo handling errors
         # print(self._unpack_status(reply))
 
@@ -217,6 +256,24 @@ class MFC(Instrument):
             return True
         else:
             return False
+
+    def sendcmd(self, pkg: bytes) -> None:
+        """Write a command to the instrument.
+
+        Uses the query command to check return, i.e., that everything is fine,
+        but does not return data.
+
+        :param bytes pkg: The package to send to the instrument.
+        """
+        data = self.query(pkg)
+        if data:
+            status = data[7:9]
+            if status != "00":
+                raise OSError(
+                    f"{self._status_codes.get(status, 'Unknown status error')} (DATA={data})"
+                )
+        else:
+            raise ValueError("No data received from the device.")
 
 
 #
