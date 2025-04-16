@@ -39,6 +39,8 @@ from . import teledyne
 from . import thorlabs
 from . import toptica
 from . import yokogawa
+from . import matsusada
+
 
 from .config import load_instruments
 from .units import ureg as units

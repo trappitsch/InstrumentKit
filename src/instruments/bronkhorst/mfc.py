@@ -1,4 +1,7 @@
-#!/usr/bin/env python
+#print(capacity rawdata
+#print("data raw : ", data)
+#Ajouts entre 182 et 269
+
 """Support for Bronkhorst mass flow controllers (flow meters)
 Tested devices :
   -F-201CV-xxxx
@@ -26,8 +29,9 @@ class MFC(Instrument):
 
     Example:
         >>> import instruments as ik
-        >>> ip = '10.27.16.74'
-        >>> remote_port = 4001
+        >>> ip = '192.168.127.254' #'10.27.16.74'
+
+        >>> remote_port = 4003
         >>> mfctest = ik.bronkhorst.MFC.open_tcpip(ip, remote_port)
         >>> mfctest.name
         'M23206772A'
@@ -153,9 +157,9 @@ class MFC(Instrument):
         """
 
         data = self.query(self._read_commands.get("Fsetpoint"))
-        print("data raw : ", data)
+        #print("data raw : ", data)
         data = self._extract_data(data)
-        print(data)
+        #print(data)
         setpoint = struct.unpack("!f", bytes.fromhex(data))[0]
         # call capacity_unit to get the set unit
         # todo complete dictionary of units
@@ -177,6 +181,251 @@ class MFC(Instrument):
         # todo error if reading setpoint back is very different
         rep = self.query(self._read_commands.get("Fsetpoint"))
 
+    # -------------------------------------------------------------------------
+    # ADDITIONS
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # ADDITIONS
+    # -------------------------------------------------------------------------
+    @property
+    def theoretical_flow(self) -> u.Quantity:
+        """
+        Reads the setpoint currently stored in the regulator.
+        """
+        # ProPar command to read setpoint = ":06800421432143\r\n"
+        read_cmd = ":06800421412143\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+
+        val = struct.unpack("!f", bytes.fromhex(extracted))[0]
+        return assume_units(val, self.capacity_unit)
+
+    @theoretical_flow.setter
+    def theoretical_flow(self, value):
+        """
+        Writes a new setpoint in the regulator.
+        """
+        value = assume_units(value, self.capacity_unit)
+
+        floatval = float(value.magnitude)
+        self.sendcmd(self._make_pkg(self._write_commands.get("Fsetpoint"), floatval))
+        _ = self.query(self._read_commands.get("Fsetpoint"))
+
+    @property
+    def real_flow(self) -> u.Quantity:
+        """
+        Reads the measured (real) flow by the Bronkhorst.
+        """
+        read_cmd = ":06800421402140\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+
+        val = struct.unpack("!f", bytes.fromhex(extracted))[0]
+        return assume_units(val, self.capacity_unit)
+
+    @property
+    def fluid_name(self) -> str:
+        """
+        Reads the fluid name (string) stored in the instrument.
+        """
+        read_cmd = ":078004017101710A\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return "Unknown"
+        return bytearray.fromhex(extracted).decode(errors="replace")
+
+    @property
+    def flow_measurement(self) -> u.Quantity:
+        """
+        For the interface that wants to read/write "flow_measurement":
+          - Read => real_flow
+          - Write => theoretical_flow
+        """
+        return self.real_flow
+
+    @flow_measurement.setter
+    def flow_measurement(self, value):
+        # Apply the same clamp + message as theoretical_flow
+        # => Just go through theoretical_flow
+        self.theoretical_flow = value
+#é&é&é&é&é&é&é&é&é&é&éé&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é&é
+    @property
+    def alarm_mode(self) -> int:
+        """
+        Read the alarm mode (Process=97/0x61, Parameter=3).
+        Returns an integer (0 or 1).
+        - 0 => alarm mode disabled
+        - 1 => alarm mode enabled
+        """
+        # Command from doc: :06800461036103\r\n
+        read_cmd = ":06800461036103\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+        # 'extracted' is typically "00" or "01" in hex
+        return int(extracted, 16)
+
+    @alarm_mode.setter
+    def alarm_mode(self, value: int):
+        """
+        Write the alarm mode.
+        - 0 => disable
+        - 1 => enable
+        """
+        # Use command :058001610300\r\n to write 0
+        # or :058001610301\r\n to write 1
+        # In the code, the 'cmd' part is formed as "80016103"
+        cmd = "80016103"
+        self.sendcmd(self._make_pkg(cmd, value))
+        # Nothing more, the status is verified by sendcmd()
+
+    @property
+    def alarm_maximum_limit(self) -> int:
+        """
+        Read the Alarm maximum limit (Process=97/0x61, Parameter=1, integer).
+        Ex: :06800461216121\r\n
+        Returns the value in 'counts' (0..32000 => 0..100%).
+        """
+        read_cmd = ":06800461216121\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+        return int(extracted, 16)
+
+    @alarm_maximum_limit.setter
+    def alarm_maximum_limit(self, value: int):
+        """
+        Write the Alarm maximum limit (counts).
+        Ex: :06800161217D00\r\n -> 7D00 hex = 32000 dec => 100%
+        """
+        cmd = "80016121"  # 0x61 = process(97), param=1
+        self.sendcmd(self._make_pkg(cmd, value))
+
+    @property
+    def alarm_minimum_limit(self) -> int:
+        """
+        Read the Alarm minimum limit (Process=97/0x61, Parameter=2, integer).
+        Ex: :06800461226122\r\n
+        """
+        read_cmd = ":06800461226122\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+        return int(extracted, 16)
+
+    @alarm_minimum_limit.setter
+    def alarm_minimum_limit(self, value: int):
+        """
+        Write the Alarm minimum limit (counts).
+        Ex: :06800161211F40\r\n -> 1F40 hex = 8000 dec => 25%
+        """
+        cmd = "80016122"
+        self.sendcmd(self._make_pkg(cmd, value))
+
+    @property
+    def alarm_setpoint_mode(self) -> int:
+        """
+        Read the alarm setpoint mode (Process=97/0x61, Parameter=5, character).
+        Ex: :06800461056105\r\n -> 00 or 01 in hex
+        """
+        read_cmd = ":06800461056105\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+        return int(extracted, 16)
+
+    @alarm_setpoint_mode.setter
+    def alarm_setpoint_mode(self, value: int):
+        """
+        Write the alarm setpoint mode (0 or 1).
+        Ex: :058001610501\r\n -> set to 1
+        """
+        cmd = "80016105"
+        self.sendcmd(self._make_pkg(cmd, value))
+
+    @property
+    def alarm_new_setpoint(self) -> int:
+        """
+        Read the 'Alarm new setpoint' (Process=97/0x61, Param=6, integer).
+        Ex: :06800461266126\r\n
+        Example response => 0000 => 0%
+        """
+        read_cmd = ":06800461266126\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+        return int(extracted, 16)
+
+    @alarm_new_setpoint.setter
+    def alarm_new_setpoint(self, value: int):
+        """
+        Write the 'Alarm new setpoint' in counts (0..32000 => 0..100%).
+        Ex: :06800161260140\r\n -> 0140 hex => 320 dec => 10%
+        """
+        cmd = "80016126"
+        self.sendcmd(self._make_pkg(cmd, value))
+
+    @property
+    def alarm_delay_time(self) -> int:
+        """
+        Read the alarm delay time (Process=97/0x61, Param=7, character).
+        Ex: :06800461076107\r\n -> e.g. '03' => 3 seconds
+        """
+        read_cmd = ":06800461076107\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+        return int(extracted, 16)
+
+    @alarm_delay_time.setter
+    def alarm_delay_time(self, value: int):
+        """
+        Write the alarm delay time (in seconds).
+        Ex: :058001610703\r\n -> 3
+        """
+        cmd = "80016107"
+        self.sendcmd(self._make_pkg(cmd, value))
+
+    @property
+    def reset_alarm_enable(self) -> int:
+        """
+        Read the 'Reset alarm enable' param (Process=97/0x61, Param=9).
+        Ex: :06800461096109\r\n -> e.g. '0F'
+        """
+        read_cmd = ":06800461096109\r\n"
+        data = self.query(read_cmd)
+        extracted = self._extract_data(data)
+        if not extracted or extracted.startswith("data is corrupted"):
+            return None
+        return int(extracted, 16)
+
+    @reset_alarm_enable.setter
+    def reset_alarm_enable(self, value: int):
+        """
+        Write the 'Reset alarm enable' param (0..255).
+        Ex: :05800161090F\r\n => 0F => dec 15
+        """
+        cmd = "80016109"
+        self.sendcmd(self._make_pkg(cmd, value))
+
+    # -------------------------------------------------------------------------
+    # END OF ADDITION
+    # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # END OF ADDITION
+    # -------------------------------------------------------------------------
+
     # todo return type ?
     @property
     def capacity_unit(self):
@@ -185,8 +434,8 @@ class MFC(Instrument):
         return it as a unit
         """
         data = self.query(self._read_commands.get("Capacity unit"))
-        print("capacity unit command : ", self._read_commands.get("Capacity unit"))
-        print("capacity unit rawdata : ", data)
+        #print("capacity unit command : ", self._read_commands.get("Capacity unit"))
+        #print("capacity unit rawdata : ", data)
         data = self._extract_data(data)
         unit_str = bytearray.fromhex(data).decode()
         return self._units.get(unit_str)
