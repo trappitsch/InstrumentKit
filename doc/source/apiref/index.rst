@@ -14,6 +14,7 @@ Contents:
     instrument
     generic_scpi
     agilent
+    aimtti
     comet
     dressler
     fluke
@@ -29,11 +30,13 @@ Contents:
     newport
     ondax
     oxford
+    pfeiffer
     phasematrix
     picowatt
     qubitekk
     rigol
     srs
+    sunpower
     tektronix
     teledyne
     thorlabs
